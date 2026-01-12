@@ -57,17 +57,18 @@
 #include "cppflow/pb_helper.h"
 
 namespace cppflow {
-  inline void setup_SessionOptions(TF_SessionOptions* options) {
+  inline void setup_SessionOptions(TF_SessionOptions* options, const std::vector<uint8_t>& config_bytes) {
 
     std::shared_ptr<TF_Status>  status = {TF_NewStatus(), &TF_DeleteStatus};
     // MANUAL PROTOBUF CONSTRUCTION
     // Hierarchy: ConfigProto -> GPUOptions (6) -> Experimental (16) -> DisableTF32 (3)
     // Hex: 32 05 82 01 02 18 00
-    const std::vector<uint8_t> config_bytes = {
-      0x32, 0x05,             // Field 6 (GPUOptions), Length 5
-      0x82, 0x01, 0x02,       // Field 16 (Experimental), Length 2
-      0x18, 0x00              // Field 3 (TF32 Enabled), Value 0 (False)
-  };
+
+    //const std::vector<uint8_t> config_bytes = {
+    //  0x32, 0x05,             // Field 6 (GPUOptions), Length 5
+    //  0x82, 0x01, 0x02,       // Field 16 (Experimental), Length 2
+    //  0x18, 0x00              // Field 3 (TF32 Enabled), Value 0 (False)
+    //};
 
     // Pass the raw bytes to TF_SetConfig
     TF_SetConfig(
@@ -88,7 +89,8 @@ class model {
   };  // enum TYPE
 
   explicit model(const std::string& filename,
-                 const TYPE type = TYPE::SAVED_MODEL);
+                 const std::vector<uint8_t>& config_bytes = {},
+                 const TYPE type = TYPE::SAVED_MODEL );
   model(const model &model) = default;
   model(model &&model) = default;
 
@@ -151,7 +153,7 @@ class model {
 
 namespace cppflow {
 
-  inline model::model(const std::string &filename, const TYPE type) {
+  inline model::model(const std::string &filename,  const std::vector<uint8_t>& config_bytes, const TYPE type) {
     this->status = {TF_NewStatus(), &TF_DeleteStatus};
     this->graph = {TF_NewGraph(), TF_DeleteGraph};
 
@@ -164,7 +166,7 @@ namespace cppflow {
       status_check(this->status.get());
     };
 
-    setup_SessionOptions(session_options.get());
+    setup_SessionOptions(session_options.get(), config_bytes);
 
     if (type == TYPE::SAVED_MODEL) {
       std::unique_ptr<TF_Buffer, decltype(&TF_DeleteBuffer)> run_options = {
