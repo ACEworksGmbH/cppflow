@@ -54,8 +54,31 @@
 #include "cppflow/context.h"
 #include "cppflow/defer.h"
 #include "cppflow/tensor.h"
+#include "cppflow/pb_helper.h"
 
 namespace cppflow {
+  inline void setup_SessionOptions(TF_SessionOptions* options) {
+
+    std::shared_ptr<TF_Status>  status = {TF_NewStatus(), &TF_DeleteStatus};
+    // MANUAL PROTOBUF CONSTRUCTION
+    // Hierarchy: ConfigProto -> GPUOptions (6) -> Experimental (16) -> DisableTF32 (3)
+    // Hex: 32 05 82 01 02 18 00
+    const std::vector<uint8_t> config_bytes = {
+      0x32, 0x05,             // Field 6 (GPUOptions), Length 5
+      0x82, 0x01, 0x02,       // Field 16 (Experimental), Length 2
+      0x18, 0x00              // Field 3 (TF32 Enabled), Value 0 (False)
+  };
+
+    // Pass the raw bytes to TF_SetConfig
+    TF_SetConfig(
+        options,
+        reinterpret_cast<const void*>(config_bytes.data()),
+        config_bytes.size(),
+        status.get()
+    );
+
+    status_check(status.get());
+  }
 
 class model {
  public:
@@ -80,13 +103,48 @@ class model {
 
   std::vector<std::string> get_operations() const;
   std::vector<int64_t> get_operation_shape(const std::string& operation) const;
-
- private:
-  TF_Buffer * readGraph(const std::string& filename);
+  void print_signatures();
 
   std::shared_ptr<TF_Status> status;
   std::shared_ptr<TF_Graph> graph;
   std::shared_ptr<TF_Session> session;
+
+  std::vector<std::string> graph_inputs;
+  std::map<string, Signature>  signatures;
+  std::vector<std::string> get_graph_inputs() const {return this->graph_inputs;}
+  std::vector<std::string> read_graph_inputs() const ;
+  std::string get_meta_graph_def() const { return meta_graph_def_; }
+
+    /**
+ * Checks if a specific signature key exists in the loaded model.
+ * @param name The signature key (e.g., "serving_default")
+ * @return true if found, false otherwise.
+ */
+  bool has_signature(const std::string& name) const {
+    // std::map::find returns an iterator to the end if the key is not found
+    return signatures.find(name) != signatures.end();
+  }
+
+  /**
+ * Checks if a specific input tensor name exists in the graph inputs.
+ * @param name The input name to check (e.g., "serving_default_input_1")
+ * @return true if found, false otherwise.
+ */
+  bool has_graph_input(const std::string& name) const {
+    // Iterate through the vector to find the name
+    for (const auto& input : this->graph_inputs) {
+      if (input == name) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+ private:
+  TF_Buffer * readGraph(const std::string& filename);
+  std::string meta_graph_def_;
+
+
 };  // Class model
 
 }  // namespace cppflow
@@ -106,6 +164,8 @@ inline model::model(const std::string &filename, const TYPE type) {
     status_check(this->status.get());
   };
 
+  setup_SessionOptions(session_options.get());
+
   if (type == TYPE::SAVED_MODEL) {
     std::unique_ptr<TF_Buffer, decltype(&TF_DeleteBuffer)> run_options = {
         TF_NewBufferFromString("", 0), TF_DeleteBuffer};
@@ -119,6 +179,28 @@ inline model::model(const std::string &filename, const TYPE type) {
                                      filename.c_str(), &tag, tag_len,
                                      this->graph.get(), meta_graph.get(),
                                      this->status.get()), session_deleter};
+    status_check(this->status.get());
+
+    // --- fill inputs ---
+    this->graph_inputs = this->read_graph_inputs();
+
+    // --- fill signatures---
+    if (meta_graph->data != nullptr) {
+      this->meta_graph_def_.assign(
+          static_cast<const char*>(meta_graph->data),
+          meta_graph->length
+      );
+
+      // 1. Get the raw binary blob
+      std::string blob = this->get_meta_graph_def();
+
+      // 2. Parse it
+      this->signatures = cppflow::ParseSignatures(blob);
+    } else {
+      throw std::runtime_error("Failed to import  meta graph data");
+    }
+    // ----------------------
+
   } else if (type == TYPE::FROZEN_GRAPH)  {
     this->session = {TF_NewSession(this->graph.get(), session_options.get(),
                                    this->status.get()),
@@ -291,6 +373,46 @@ inline TF_Buffer * model::readGraph(const std::string& filename) {
   return buffer;
 }
 
+  // Implementation in namespace cppflow
+
+  inline std::vector<std::string> model::read_graph_inputs() const {
+  std::vector<std::string> inputs;
+  size_t pos = 0;
+  TF_Operation* oper;
+
+  // Iterate through all operations in the graph
+  while ((oper = TF_GraphNextOperation(this->graph.get(), &pos)) != nullptr) {
+    // Check the operation type
+    const char* type = TF_OperationOpType(oper);
+
+    // "Placeholder" nodes are the standard inputs for SavedModels
+    if (std::string(type) == "Placeholder") {
+      inputs.emplace_back(TF_OperationName(oper));
+    }
+  }
+  return inputs;
+}
+
+ inline void model::print_signatures()  {
+
+    // 3. Print or Use results
+    for (const auto& [sig_name, sig_data] : signatures) {
+      std::cout << "Signature: " << sig_name << std::endl;
+
+      std::cout << "  Inputs:" << std::endl;
+      for (const auto& [input_key, tensor_info] : sig_data.inputs) {
+        std::cout << "    Key: \"" << input_key
+                  << "\" -> Tensor: \"" << tensor_info.name << "\"" << std::endl;
+      }
+
+      std::cout << "  Outputs:" << std::endl;
+      for (const auto& [output_key, tensor_info] : sig_data.outputs) {
+        std::cout << "    Key: \"" << output_key
+                  << "\" -> Tensor: \"" << tensor_info.name << "\"" << std::endl;
+      }
+    }
+
+  }
 }  // namespace cppflow
 
 #endif  // INCLUDE_CPPFLOW_MODEL_H_
