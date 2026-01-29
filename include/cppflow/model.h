@@ -112,7 +112,7 @@ class model {
   std::shared_ptr<TF_Session> session;
 
   std::vector<std::string> graph_inputs;
-  std::map<string, Signature>  signatures;
+  std::map<std::string, Signature>  signatures;
   std::vector<std::string> get_graph_inputs() const {return this->graph_inputs;}
   std::vector<std::string> read_graph_inputs() const ;
   std::string get_meta_graph_def() const { return meta_graph_def_; }
