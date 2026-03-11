@@ -9,11 +9,14 @@
 #include <map>
 #include <iostream>
 
+#include <tensorflow/c/c_api.h>
+#include "cppflow/datatype.h"
+
 namespace cppflow {
 
     struct TensorInfo {
         std::string name;
-        int dtype = 0;              // TF DataType Enum (e.g., 1=DT_FLOAT, 3=DT_INT32)
+        datatype dtype;              // TF DataType Enum (e.g., TF_FLOAT, TF_INT32)
         std::vector<int64_t> shape; // Dimensions (Empty usually means scalar or unknown)
     };
 
@@ -125,7 +128,7 @@ namespace cppflow {
             if (field == 1) {       // Field 1: Name (String)
                 info.name = reader.read_string();
             } else if (field == 2) { // Field 2: Dtype (Enum/Varint)
-                info.dtype = static_cast<int>(reader.read_varint());
+                info.dtype = static_cast<datatype>(reader.read_varint());
             } else if (field == 3) { // Field 3: TensorShape (Nested)
                 info.shape = ParseTensorShape(reader.read_string());
             } else {
